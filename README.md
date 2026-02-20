@@ -47,8 +47,8 @@ A Proof of Concept that combines a machine learning churn classification model w
 ### 1. Clone and install dependencies
 
 ```bash
-git clone https://github.com/Adhamkhedr/churn-prediction-chatbot.git
-cd churn-prediction-chatbot
+git clone https://github.com/Adhamkhedr/churn-prediction-chatbot-updated.git
+cd churn-prediction-chatbot-updated
 pip install -r requirements.txt
 ```
 
