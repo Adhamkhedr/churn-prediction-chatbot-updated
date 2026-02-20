@@ -41,7 +41,7 @@ A Proof of Concept that combines a machine learning churn classification model w
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.10 or higher
 - [Ollama](https://ollama.com) installed
 
 ### 1. Clone and install dependencies
