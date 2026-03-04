@@ -8,17 +8,20 @@ from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder
 # ----------------------------------------------
 # 1) COLUMN GROUP DEFINITIONS
 # ----------------------------------------------
-"""groups all 20 columns into 4 lists based on how they'll be encoded
- (binary, onehot, label, numeric)"""
+# Groups columns into 4 lists based on how they'll be encoded (binary, onehot, label, numeric)
+# 3 weak features (gender, Phone_Service, Dual) are excluded — confirmed by SHAP after training
 
-BINARY_COLS = ['Is_Married', 'Dependents', 'Phone_Service', 'Paperless_Billing']
-#columns that only have Yes/No values
+BINARY_COLS = ['Is_Married', 'Dependents', 'Paperless_Billing']
+# columns that only have Yes/No values
+# Phone_Service removed — weak (EDA spread 1.78pp, perm importance 0.0077, ablation confirmed)
 
 ONEHOT_COLS = ['Internet_Service', 'Contract', 'Payment_Method']
 # columns with 3+ unordered text values (3 columns)
 
-LABEL_COLS = ['gender', 'Dual', 'Online_Security', 'Online_Backup',
+LABEL_COLS = ['Online_Security', 'Online_Backup',
               'Device_Protection', 'Tech_Support', 'Streaming_TV', 'Streaming_Movies']
+# gender removed — weak (EDA spread 0.76pp, perm importance 0.0117, ablation confirmed)
+# Dual removed   — weak (EDA spread 3.68pp, perm importance 0.0097, ablation confirmed)
 
 NUMERIC_COLS = ['Senior_Citizen', 'tenure', 'Monthly_Charges', 'Total_Charges',
                 'charges_per_tenure']
@@ -27,7 +30,7 @@ NUMERIC_COLS = ['Senior_Citizen', 'tenure', 'Monthly_Charges', 'Total_Charges',
 
 
 # ----------------------------------------------
-# 2) FEATURE ENGINEER (sklearn transformer) — EXPERIMENT, LATER DROPPED
+# FEATURE ENGINEER (sklearn transformer) — EXPERIMENT, LATER DROPPED
 # ----------------------------------------------
 # WHAT WE TRIED TO DO:
 # Total_Charges on its own is misleading — a customer with 24 months will naturally
@@ -70,7 +73,7 @@ class FeatureEngineer(BaseEstimator, TransformerMixin):
         return X
 
 # ----------------------------------------------
-# 3) DATA LOADING & CLEANING
+# 2) DATA LOADING & CLEANING
 # ----------------------------------------------
 def load_and_clean_data():
     """Load raw CSV and return clean X, y ready for training.
@@ -80,10 +83,11 @@ def load_and_clean_data():
         3. Drop customerID
         4. Convert Total_Charges to numeric
         5. Fill blank Total_Charges with 0 (tenure=0 customers not yet billed)
-        6. Separate target (Churn) from features
+        6. Drop weak features: Total_Charges, gender, Phone_Service, Dual
+        7. Separate target (Churn) from features
 
     Returns:
-        X (DataFrame): Feature matrix (20 columns)
+        X (DataFrame): Feature matrix (15 columns)
         y (Series): Binary target (0=No, 1=Yes)
     """
     data_path = os.path.join(os.path.dirname(__file__), '..', 'data',
@@ -138,8 +142,21 @@ def load_and_clean_data():
     df['Total_Charges'] = df['Total_Charges'].fillna(0)
     print(f"Filled {filled_count} blank Total_Charges with 0")
 
+    # Drop confirmed weak features — evidence from 3 methods:
+    #
+    # Total_Charges:
+    #   - 0.83 correlated with tenure (EDA Part 4C) — nearly the same signal
+    #   - Permutation importance = 0.0000 — shuffling it causes zero Recall drop
+    #
+    # gender, Phone_Service, Dual:
+    #   - EDA Part 5: churn rate spread of 0.76pp, 1.78pp, 3.68pp — near zero separation
+    #   - Permutation importance: 0.0117, 0.0077, 0.0097 — small individual contribution
+    #   - Ablation test: dropping all 3 together improves Recall from 0.8075 to 0.8209
+    #     (individually they add slight noise; together their removal actually helps)
+    df.drop(columns=['Total_Charges', 'gender', 'Phone_Service', 'Dual'], inplace=True)
+
     # Separate target
-    y = df['Churn'].map({'Yes': 1, 'No': 0})   #Takes the Churn column and converts 'Yes' → 1 and 'No' → 0. 
+    y = df['Churn'].map({'Yes': 1, 'No': 0})   #Takes the Churn column and converts 'Yes' → 1 and 'No' → 0.
     X = df.drop('Churn', axis=1)
 
     print(f"Features: {X.shape[1]} columns, {X.shape[0]} rows")
@@ -162,13 +179,10 @@ def build_preprocessor(numeric_cols=None):
     if numeric_cols is None:
         numeric_cols = NUMERIC_COLS
 
-    preprocessor = ColumnTransformer([   
-        """ColumnTransformer is a Scikit-learn utility 
-        that allows to apply different preprocessing 
-        steps to different columns in the dataset."""
-
+    # ColumnTransformer applies different preprocessing steps to different columns simultaneously
+    preprocessor = ColumnTransformer([
         ('binary', OrdinalEncoder(
-            categories=[['No', 'Yes']] * len(BINARY_COLS),  #for each of the 4 binary columns, force the order No=0, Yes=1
+            categories=[['No', 'Yes']] * len(BINARY_COLS),  #for each binary column, force the order No=0, Yes=1
             handle_unknown='use_encoded_value', unknown_value=-1
         ), BINARY_COLS),    #Applies OrdinalEncoder to BINARY_COLS
         ('onehot', OneHotEncoder(

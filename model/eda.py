@@ -167,7 +167,8 @@ if len(blank_tc) > 0:
 # Pattern: every row has tenure=0 and Churn=No.
 # These customers just signed up and haven't completed a billing cycle yet,
 # so Total_Charges is blank — not a data error, just a timing issue.
-# Action: drop these 11 rows at preprocessing (they carry no churn signal).
+# Action: fill Total_Charges with 0 at preprocessing — $0 is the correct value for
+# a customer not yet billed. All 11 rows are kept (they have Churn=No and are valid customers).
 
 # CHECK 4: Fully duplicate rows
 dup_count = df.duplicated().sum()
@@ -636,8 +637,7 @@ print("  Total_Charges and Churn show -0.20.")
 #     15. Phone_Service     ~1.78pp
 #     16. gender            ~0.76pp  <- weakest, essentially no signal
 #
-#   Bottom 3 (gender, Phone_Service, Dual) dropped from the model.
-#   Decision confirmed by SHAP importance scores after training.
+
 # ─────────────────────────────────────────────────────────────────── 
 # LIMITATIONS OF THIS METHOD:
 #   1. Spread ignores sample size per category
@@ -1246,30 +1246,33 @@ churn_binary = (df['Churn'] == 'Yes').astype(int)
 corr_cpt = df['charges_per_tenure'].corr(churn_binary)
 print(f"\n  Correlation of charges_per_tenure with Churn: {corr_cpt:.4f}")
 
-# 2.6 — Compare against Total_Charges' correlation to see if the new feature adds signal
-corr_tc = df['Total_Charges'].corr(churn_binary)
-print(f"  Correlation of Total_Charges with Churn: {corr_tc:.4f}")
+# 2.6 — Compare against Monthly_Charges' correlation
+# charges_per_tenure = Total_Charges / tenure ≈ average monthly spend
+# So the fair comparison is against Monthly_Charges — does our engineered feature
+# add anything beyond what Monthly_Charges already captures?
+corr_mc = df['Monthly_Charges'].corr(churn_binary)
+print(f"  Correlation of Monthly_Charges with Churn:     {corr_mc:.4f}")
 
 # 2.7 — Auto-print which is stronger (or if they're equal)
 abs_cpt = abs(corr_cpt)
-abs_tc = abs(corr_tc)
-if abs_cpt > abs_tc:
+abs_mc = abs(corr_mc)
+if abs_cpt > abs_mc:
     stronger = 'charges_per_tenure'
-    weaker = 'Total_Charges'
-elif abs_tc > abs_cpt:
-    stronger = 'Total_Charges'
+    weaker = 'Monthly_Charges'
+elif abs_mc > abs_cpt:
+    stronger = 'Monthly_Charges'
     weaker = 'charges_per_tenure'
 else:
     stronger = None
 
 if stronger:
-    print(f"\n  {stronger} (|r|={max(abs_cpt, abs_tc):.4f}) has a stronger correlation with Churn than {weaker} (|r|={min(abs_cpt, abs_tc):.4f}).")
+    print(f"\n  {stronger} (|r|={max(abs_cpt, abs_mc):.4f}) has a stronger correlation with Churn than {weaker} (|r|={min(abs_cpt, abs_mc):.4f}).")
 else:
-    print(f"\n  charges_per_tenure and Total_Charges have equal correlation magnitude with Churn (|r|={abs_cpt:.4f}).")
+    print(f"\n  charges_per_tenure and Monthly_Charges have equal correlation magnitude with Churn (|r|={abs_cpt:.4f}).")
 
 # OUTPUT:
 #   Correlation of charges_per_tenure with Churn: 0.1925
-#   Correlation of Total_Charges    with Churn: 0.1934
+#   Correlation of Monthly_Charges    with Churn: 0.1934
 #
 #   charges_per_tenure (|r|=0.1925) vs Monthly_Charges (|r|=0.1934) — virtually identical.
 #   The engineered feature added no new signal. Dropped from the final model.
@@ -1398,6 +1401,9 @@ for pm in sorted(payment_methods):  # sorted() for consistent alphabetical outpu
 
 # ══════════════════════════════════════════════════
 # PART 8 — CATEGORICAL CONSISTENCY CHECK
+# NOTE: appears after Part 9 in the code because it was added later.
+# Logically it belongs after Part 2 (data quality), but placed here to avoid
+# restructuring the script.
 # ══════════════════════════════════════════════════
 # WHAT WE LOOKED FOR:
 #   Are categorical values written consistently across all rows?

@@ -91,7 +91,7 @@ streamlit run ui/app.py
 
 ### Quick Mode vs Full Mode
 
-- **Quick Mode** collects the 6 most influential features (identified by SHAP analysis). If the prediction is confident (below 20% or above 80%), the result is returned immediately.
+- **Quick Mode** collects the 6 most influential features (identified by permutation importance on the validation set). If the prediction is confident (below 20% or above 80%), the result is returned immediately.
 - **Full Mode** is triggered when the quick prediction is uncertain (20-80%). The chatbot asks for 9 additional features to improve accuracy.
 
 ## Try It Out
@@ -139,10 +139,10 @@ If it asks for more details, provide:
 
 | Metric | Score |
 |--------|-------|
-| Recall | 0.810 |
-| F1 Score | 0.621 |
-| Precision | 0.503 |
-| ROC-AUC | 0.845 |
+| Recall | 0.813 |
+| F1 Score | 0.628 |
+| Precision | 0.511 |
+| ROC-AUC | 0.846 |
 
 Optimized for **recall** -catching customers who are about to churn is more valuable than avoiding false positives.
 

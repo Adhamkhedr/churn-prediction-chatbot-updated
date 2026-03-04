@@ -35,11 +35,7 @@ OLLAMA_MODEL = "mistral"
 QUICK_SLOTS = ['tenure', 'Contract', 'Monthly_Charges', 'Internet_Service',
                'Tech_Support', 'Online_Security']
 
-# Total_Charges is in input_columns but the model doesn't use it
-# (Version C dropped it — redundant with tenure, corr 0.83).
-# We don't collect it from users; make_prediction fills it from defaults.
-IGNORED_COLS = ['Total_Charges']
-ALL_SLOTS = [col for col in input_columns if col not in IGNORED_COLS]
+ALL_SLOTS = list(input_columns)
 
 # Valid values for categorical fields (for validation)
 # Note: gender, Phone_Service, Dual were dropped — EDA showed <4pp churn
