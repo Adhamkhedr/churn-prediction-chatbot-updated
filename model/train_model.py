@@ -1,15 +1,15 @@
-import joblib
+import joblib  #saves the trained pipeline to a .pkl file
 import os
 import numpy as np
 import pandas as pd
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import Pipeline  
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder
 from sklearn.model_selection import (train_test_split, StratifiedKFold,
                                      RandomizedSearchCV)
 from sklearn.metrics import (recall_score, f1_score, precision_score,
                              roc_auc_score, confusion_matrix, classification_report)
-from sklearn.inspection import permutation_importance
+from sklearn.inspection import permutation_importance   # measure how much Recall drops when each feature is shuffled.
 from sklearn.linear_model import LogisticRegression
 from xgboost import XGBClassifier
 from preprocessing import (load_and_clean_data, build_preprocessor, FeatureEngineer,
@@ -21,13 +21,13 @@ from preprocessing import (load_and_clean_data, build_preprocessor, FeatureEngin
 #   C) Hyperparameter tuning using cross-validation on Train only
 #   D) Final training on Train + Validation combined
 #   E) Final evaluation on Test set — touched exactly once
-#   F) SHAP analysis on Test for interpretation only (no decisions)
+#   F) SHAP analysis on Test for interpretation only 
 # Then saves the trained pipeline to churn_pipeline.pkl for the chatbot.
 
 # ----------------------------------------------
 # 1. LOAD CLEAN DATA
 # ----------------------------------------------
-X, y = load_and_clean_data()  # 19 columns, 7043 rows
+X, y = load_and_clean_data()  # X — the feature matrix, 15 columns, 7043 rows- y — the target column (0 = No churn, 1 = Yes churn)   
 
 # ----------------------------------------------
 # 2. THREE-WAY SPLIT: Train / Validation / Test
@@ -115,7 +115,10 @@ print("\n" + "=" * 60)
 print("B. WEAK FEATURE REMOVAL (Permutation Importance on Validation)")
 print("=" * 60)
 
-# Train a baseline model on Train using the best feature set from step A
+# Train a baseline model on Train using the best feature set from step A . 
+ #Purpose: we need ANY trained model to run permutation importance — it's just a tool to measure feature       
+  #importance, not the final model
+# Chains the preprocessor + model into one object so you can call .fit() and .predict() on both at once.
 baseline_pipeline = Pipeline([
     ('preprocessor', build_preprocessor(NUMERIC_COLS)),
     ('model', XGBClassifier(
@@ -125,6 +128,11 @@ baseline_pipeline = Pipeline([
     ))
 ])
 baseline_pipeline.fit(X_train, y_train)
+"""Trains the pipeline on Train data only. Runs the preprocessor to encode X_train, then trains XGBoost on the    
+  encoded result.
+  All 15 columns go in → all get processed → XGBoost sees 19 encoded features (some text columns expand when     
+  one-hot encoded).
+  """
 
 # Permutation importance — shuffles each original column in X_val one at a time
 # and measures the drop in Recall. Uses the full pipeline so preprocessing is
@@ -157,19 +165,7 @@ for name, mean_drop, std_drop in perm_pairs:
 # Confirmed weak features are dropped once in preprocessing.py, not dynamically here.
 
 # Build the final preprocessor using the confirmed column lists from preprocessing.py
-preprocessor_final = ColumnTransformer([
-    ('binary', OrdinalEncoder(
-        categories=[['No', 'Yes']] * len(BINARY_COLS),
-        handle_unknown='use_encoded_value', unknown_value=-1
-    ), BINARY_COLS),
-    ('onehot', OneHotEncoder(
-        drop='first', sparse_output=False, handle_unknown='ignore'
-    ), ONEHOT_COLS),
-    ('label', OrdinalEncoder(
-        handle_unknown='use_encoded_value', unknown_value=-1
-    ), LABEL_COLS),
-    ('numeric', 'passthrough', NUMERIC_COLS),
-])
+preprocessor_final = build_preprocessor(NUMERIC_COLS)
 
 # ----------------------------------------------
 # C. HYPERPARAMETER TUNING
@@ -195,7 +191,8 @@ base_pipeline = Pipeline([
     ))
 ])
 
-# Search space — prefixed with 'model__' because XGBClassifier is named 'model' in the pipeline
+# what settings should XGBoost use to get the best Recall?
+# 'model__' because XGBClassifier is named 'model' in the pipeline
 param_distributions = {
     'model__max_depth':        [3, 4, 5, 6, 7],
     'model__n_estimators':     [100, 200, 300, 500],
@@ -220,6 +217,8 @@ search = RandomizedSearchCV(
     n_jobs=-1,
     verbose=1,
 )
+# Instead of trying every possible combination (would be thousands), RandomizedSearchCV randomly picks 50        
+#combinations and evaluates each one with 5-fold CV → 250 fits total.
 
 print("Running 50 iterations with 5-fold CV on Train (250 fits total)...")
 search.fit(X_train, y_train)
@@ -229,11 +228,11 @@ print(f"\nBest Hyperparameters:")
 for param, value in search.best_params_.items():
     clean_name = param.replace('model__', '')
     print(f"  {clean_name}: {value}")
-
+#search.best_params_ contains the combination that gave the highest average Recall across the 5 folds.
 # ----------------------------------------------
 # D. FINAL TRAINING ON TRAIN + VALIDATION
 # ----------------------------------------------
-# All decisions are now made (feature set, weak feature drop, hyperparameters).
+# All decisions are now made: Which features to use (Section A + B) , Which hyperparameters to use (Section C) 
 # Combine Train and Validation to give the final model as much data as possible.
 # Both XGBoost and LR are trained on the same data for a fair comparison.
 print("\n" + "=" * 60)
@@ -256,6 +255,7 @@ xgb_pipeline = Pipeline([
         eval_metric='logloss',
     ))
 ])
+#The real final model — trained with the best hyperparameters from Section C on the combined Train+Val data.
 xgb_pipeline.fit(X_trainval, y_trainval)
 
 # Logistic Regression baseline — same training data as XGBoost for fair comparison
