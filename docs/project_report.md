@@ -21,7 +21,7 @@
 
 This project delivers a Proof of Concept (PoC) for an AI-powered churn prediction system. It combines a tuned XGBoost classification model with a locally-hosted open-source LLM (Mistral 7B via Ollama) to create a chatbot that allows a marketing team to predict customer churn through natural language conversation.
 
-The system achieves a **Recall of 81.0%** (correctly identifies 81 out of 100 customers who will churn) with a **ROC-AUC of 0.845**. It provides personalized, per-customer risk factor explanations using SHAP (SHapley Additive exPlanations), giving the marketing team not just a prediction but an understanding of *why* a customer is at risk.
+The system achieves a **Recall of 81.3%** (correctly identifies 81 out of 100 customers who will churn) with a **ROC-AUC of 0.846**. It provides personalized, per-customer risk factor explanations using SHAP (SHapley Additive exPlanations), giving the marketing team not just a prediction but an understanding of *why* a customer is at risk.
 
 The entire solution runs locally with no external API calls, meeting the client's requirement for open-source models and data privacy.
 
@@ -76,7 +76,7 @@ Customers with fiber optic internet churn at roughly 42%, compared to approximat
 
 **3. Short Tenure + High Charges = Danger Zone**
 
-Customers who have been with the company for less than 12 months and pay more than $70/month have a churn rate of approximately 58%. These are new customers paying premium prices who have not yet developed loyalty. They represent the highest-risk segment.
+A quadrant analysis was performed by splitting customers at the median tenure (29 months) and median Monthly_Charges ($64.76). Customers with tenure below 29 months and Monthly_Charges above $64.76 have a churn rate of approximately 58%. These are new customers paying premium prices who have not yet developed loyalty. They represent the highest-risk segment.
 
 **4. Long Tenure + Low Charges = Safe Zone**
 
@@ -88,7 +88,7 @@ Customers without tech support churn at approximately 42% versus 15% with it. Si
 
 **6. Total Charges is Redundant with Tenure**
 
-Total Charges and tenure have a correlation of 0.83. This makes sense -a customer who has been with the company longer will naturally have higher total charges. Including both in the model introduces multicollinearity without adding new information.
+Total Charges and tenure have a correlation of 0.83. This makes sense -a customer who has been with the company longer will naturally have higher total charges. They carry nearly the same signal, so including both adds no new information. This was confirmed empirically: dropping Total Charges in Version C produced equal or better performance than keeping it.
 
 **7. Three Features Have Near-Zero Predictive Power**
 
@@ -96,14 +96,14 @@ Total Charges and tenure have a correlation of 0.83. This makes sense -a custome
 - **Phone Service**: Less than 4 percentage points difference. Nearly all customers (90%) have phone service, making this feature almost constant.
 - **Dual (multiple lines)**: Less than 4 percentage points difference. Offers minimal discriminative power.
 
-These findings were later confirmed by both XGBoost feature importance and SHAP analysis, where all three ranked at the bottom.
+These findings were later confirmed by permutation importance on the validation set and sequential ablation testing, where all three consistently showed near-zero contribution to Recall.
 
 ### How EDA Guided My Decisions
 
 | EDA Finding | Decision Made |
 |---|---|
 | Total_Charges correlated with tenure (0.83) | Tested dropping it -Version C confirmed removal improves parsimony with no performance loss |
-| Gender, Phone_Service, Dual are weak | Tested dropping them -SHAP confirmed near-zero impact, dropped from final model |
+| Gender, Phone_Service, Dual are weak | Confirmed by permutation importance on validation set (near-zero Recall drop). Ablation test showed dropping all three together improved Recall from 0.8075 to 0.8209. Permanently dropped. |
 | 11 rows have blank Total_Charges (all tenure=0) | Filled with 0 instead of dropping -these are new customers not yet billed, and 0 is the correct value |
 | Class imbalance (73/27) | Used `scale_pos_weight=2.77` in XGBoost to upweight the minority class |
 | Contract, tenure, internet type are strong separators | These became part of the "quick mode" features in the chatbot |
@@ -150,16 +150,29 @@ XGBoost is a tree-based model. Trees split on feature values using thresholds -t
 
 ### Weak Feature Removal
 
-After training the model, I conducted a controlled experiment: train with and without the three weak features identified in EDA (gender, Phone_Service, Dual).
+Weak feature removal followed a three-step methodology to ensure decisions were evidence-based and not influenced by the test set:
 
-| Metric | With Weak Features | Without | Difference |
+**Step 1 — EDA Pre-filter (churn rate spread):**
+Before any model training, EDA Part 5 computed the churn rate spread for every categorical feature (max churn rate minus min churn rate across categories). Features with near-zero spread have no discriminative power. This flagged gender (0.76pp), Phone_Service (1.78pp), and Dual (3.68pp) as potentially weak — far below the next weakest feature (Is_Married at 13.29pp).
+
+**Step 2 — Permutation Importance on Validation:**
+After training a baseline model on the training set, permutation importance was computed on the validation set. For each feature, its values were randomly shuffled (destroying its signal) and the drop in Recall was measured. This was repeated 10 times per feature and averaged. Features where shuffling caused no meaningful Recall drop were flagged as weak. Importantly, this was done on the **validation set** (not the test set) to keep the test set untouched for final evaluation.
+
+**Step 3 — Sequential Ablation Testing:**
+To confirm the drop decisions, a sequential ablation test was run: starting from a baseline with all features, features were dropped one by one and performance was recorded at each step.
+
+| Experiment | Recall | F1 | ROC-AUC |
 |---|---|---|---|
-| Recall | 0.8102 | 0.8102 | 0.0000 |
-| F1 | 0.6209 | 0.6232 | +0.0023 |
-| Precision | 0.5033 | 0.5059 | +0.0026 |
-| ROC-AUC | 0.8453 | 0.8451 | -0.0002 |
+| Baseline (all features) | 0.8075 | 0.6198 | 0.8441 |
+| Drop gender | 0.8075 | 0.6198 | 0.8441 |
+| Drop gender + Phone_Service | 0.8102 | 0.6209 | 0.8453 |
+| Drop gender + Phone_Service + Dual | **0.8209** | **0.6253** | **0.8471** |
 
-The results confirmed what EDA and SHAP both predicted: these features carry virtually no signal. Dropping them slightly improved F1 and Precision while maintaining Recall. The final model uses **15 input features** (down from the original 20), producing **19 encoded features** after preprocessing.
+Dropping all three together improved Recall by 1.34 percentage points. Each feature was adding slight noise that collectively degraded performance. All three were permanently removed from the dataset in `preprocessing.py`.
+
+**Total_Charges** was also dropped separately: it had a 0.83 correlation with tenure (nearly identical signal) and a permutation importance of 0.0000 (shuffling it caused zero Recall drop). The Version A/B/C numeric feature experiment confirmed Version C — dropping Total_Charges — as the best performing configuration.
+
+The final model uses **15 input features** (down from the original 20 in the raw dataset), producing **19 encoded features** after one-hot encoding expands the multi-category columns.
 
 ---
 
@@ -181,7 +194,17 @@ XGBoost was chosen because it is the standard choice for tabular classification 
 
 ### Training Configuration
 
-**Train/Test Split**: 80% train (5,634 rows), 20% test (1,409 rows). Stratified split to maintain the 73/27 class ratio in both sets. Fixed random_state=42 for reproducibility.
+**Three-Way Split**: The data was split into three sets to prevent data leakage — all intermediate decisions (feature selection, hyperparameter tuning) must be made without any exposure to the test set.
+
+| Set | Size | Purpose |
+|---|---|---|
+| Train | 4,507 rows (64%) | Model training and hyperparameter tuning (via CV) |
+| Validation | 1,127 rows (16%) | Permutation importance for feature drop decisions |
+| Test | 1,409 rows (20%) | Final evaluation — touched exactly once |
+
+All splits are stratified to maintain the 73/27 churn ratio. Fixed random_state=42 for reproducibility.
+
+**Why three-way and not two-way?** With a two-way split, the same held-out set would be used for both intermediate decisions (which features to drop, which hyperparameters to use) and final reporting. Every time a decision is made using the test set, the model indirectly "sees" it, inflating reported performance. A three-way split ensures the test set is genuinely unseen.
 
 **Class Imbalance Handling**: `scale_pos_weight = 2.77` (ratio of non-churners to churners in the training set). This tells XGBoost to weight misclassifications of the minority class (churners) 2.77 times more heavily, effectively upsampling without creating synthetic data. This was chosen over SMOTE or random oversampling because it is built into the algorithm, introduces no synthetic artifacts, and is computationally free.
 
@@ -211,15 +234,15 @@ I used **RandomizedSearchCV** with 50 iterations across 5 folds (250 total fits)
 
 | Parameter | Value | Interpretation |
 |---|---|---|
-| max_depth | 3 | Shallow trees -prevents overfitting on 7,043 rows |
-| n_estimators | 300 | More trees to compensate for the low learning rate |
-| learning_rate | 0.01 | Very small steps -each tree makes minimal corrections, improving generalization |
-| min_child_weight | 5 | Requires at least 5 samples per leaf -prevents learning from noise |
-| subsample | 0.6 | Each tree sees only 60% of the data -strong regularization through randomness |
-| colsample_bytree | 0.8 | Each tree uses 80% of features -reduces feature co-dependence |
-| gamma | 0 | No minimum loss requirement -the other regularization parameters are sufficient |
-| reg_alpha | 0.1 | Light L1 regularization |
-| reg_lambda | 0.5 | Moderate L2 regularization |
+| max_depth | 3 | Shallow trees — prevents overfitting on 7,043 rows |
+| n_estimators | 500 | More trees to compensate for the very low learning rate |
+| learning_rate | 0.01 | Very small steps — each tree makes minimal corrections, improving generalization |
+| min_child_weight | 5 | Requires at least 5 samples per leaf — prevents learning from noise |
+| subsample | 0.6 | Each tree sees only 60% of the data — strong regularization through randomness |
+| colsample_bytree | 0.6 | Each tree uses 60% of features — reduces feature co-dependence |
+| gamma | 1.0 | Minimum loss reduction required to make a split — makes the model conservative |
+| reg_alpha | 0.5 | Moderate L1 regularization — promotes sparsity |
+| reg_lambda | 2.0 | Strong L2 regularization — penalizes large weights, reduces overfitting |
 
 The overall theme of the best parameters is **strong regularization**: shallow trees (max_depth=3), aggressive row subsampling (60%), slow learning rate (0.01), and minimum leaf size of 5. This combination prevents overfitting on a relatively small dataset while still capturing the important patterns.
 
@@ -231,12 +254,12 @@ The overall theme of the best parameters is **strong regularization**: shallow t
 
 | Metric | XGBoost (Tuned) | Logistic Regression (Baseline) | Winner |
 |---|---|---|---|
-| Recall | **0.8102** | 0.7781 | XGBoost |
-| F1 Score | **0.6209** | 0.6148 | XGBoost |
-| Precision | 0.5033 | **0.5059** | LR (marginal) |
-| ROC-AUC | **0.8453** | 0.8389 | XGBoost |
+| Recall | **0.8128** | 0.7834 | XGBoost |
+| F1 Score | **0.6275** | 0.6162 | XGBoost |
+| Precision | **0.5109** | 0.5078 | XGBoost |
+| ROC-AUC | **0.8458** | 0.8377 | XGBoost |
 
-After tuning, XGBoost outperforms the Logistic Regression baseline on all metrics except Precision (where the difference is negligible at 0.26 percentage points).
+After tuning, XGBoost outperforms the Logistic Regression baseline on all four metrics.
 
 ### Why Recall is the Primary Metric
 
@@ -249,10 +272,10 @@ Optimizing for Recall means the model catches as many actual churners as possibl
 
 ### Understanding the Metrics
 
-- **Recall (0.810)**: Of all customers who actually churn, the model correctly identifies 81%. It misses 19% -these are churners who slip through.
-- **Precision (0.503)**: Of all customers the model flags as churners, about 50% actually churn. The other 50% are false alarms. This sounds low, but in retention marketing, reaching out to a stable customer has minimal cost.
-- **F1 Score (0.621)**: The harmonic mean of Precision and Recall. Provides a balanced view.
-- **ROC-AUC (0.845)**: Measures the model's ability to distinguish between churners and non-churners across all thresholds. A score of 0.845 indicates good discriminative power.
+- **Recall (0.813)**: Of all customers who actually churn, the model correctly identifies 81.3%. It misses 18.7% — these are churners who slip through.
+- **Precision (0.511)**: Of all customers the model flags as churners, about 51% actually churn. The other 49% are false alarms. This sounds low, but in retention marketing, reaching out to a stable customer has minimal cost.
+- **F1 Score (0.628)**: The harmonic mean of Precision and Recall. Provides a balanced view.
+- **ROC-AUC (0.846)**: Measures the model's ability to distinguish between churners and non-churners across all thresholds. A score of 0.846 indicates good discriminative power.
 
 ### Threshold Tuning
 
@@ -260,15 +283,15 @@ The default decision threshold is 0.50 -if the predicted probability exceeds 50%
 
 | Threshold | Recall | Precision | F1 |
 |---|---|---|---|
-| 0.20 | 0.9519 | 0.3579 | 0.5202 |
-| 0.30 | 0.9037 | 0.4126 | 0.5665 |
-| 0.40 | 0.8610 | 0.4573 | 0.5974 |
-| 0.45 | 0.8396 | 0.4797 | 0.6104 |
-| **0.50** | **0.8102** | **0.5033** | **0.6209** |
-| 0.55 | 0.7594 | 0.5345 | 0.6275 |
-| 0.60 | 0.7005 | 0.5686 | 0.6278 |
+| 0.20 | 0.9626 | 0.3818 | 0.5467 |
+| 0.30 | 0.9198 | 0.4257 | 0.5821 |
+| 0.40 | 0.8610 | 0.4667 | 0.6053 |
+| 0.45 | 0.8449 | 0.4899 | 0.6202 |
+| **0.50** | **0.8128** | **0.5109** | **0.6275** |
+| 0.55 | 0.7594 | 0.5441 | 0.6339 |
+| 0.60 | 0.7059 | 0.5665 | 0.6286 |
 
-The threshold of 0.55 achieves marginally better F1 (0.6275 vs 0.6209) but at the cost of Recall dropping from 0.810 to 0.759. Since catching churners is the priority, I retained the 0.50 threshold to maintain higher Recall.
+The threshold of 0.55 achieves marginally better F1 (0.6339 vs 0.6275) but at the cost of Recall dropping from 0.813 to 0.759. Since catching churners is the priority, I retained the 0.50 threshold to maintain higher Recall.
 
 ### Overfitting Check
 
@@ -276,15 +299,15 @@ I compared model performance on the training set versus the test set:
 
 | Metric | Train | Test | Gap |
 |---|---|---|---|
-| Recall | ~0.825 | 0.810 | ~1.5% |
-| ROC-AUC | ~0.860 | 0.845 | ~1.5% |
+| Recall | ~0.827 | 0.813 | ~1.4% |
+| ROC-AUC | ~0.862 | 0.846 | ~1.6% |
 
 A gap of approximately 1.5% between train and test performance indicates the model generalizes well. Gaps above 5-10% would suggest overfitting. The strong regularization from hyperparameter tuning (shallow trees, subsampling, low learning rate) is doing its job.
 
 ### Honest Assessment
 
-- **Recall of 0.810 is good** for this dataset and task. It means the system catches 4 out of 5 at-risk customers.
-- **Precision of 0.503 is the main weakness.** Half of the customers flagged as churners will not actually churn. For a PoC, this is acceptable -the marketing team treats these as leads for outreach, not automatic actions.
+- **Recall of 0.813 is good** for this dataset and task. It means the system catches 4 out of 5 at-risk customers.
+- **Precision of 0.511 is the main weakness.** About half of the customers flagged as churners will not actually churn. For a PoC, this is acceptable — the marketing team treats these as leads for outreach, not automatic actions.
 - **These scores are typical** for the Telco Customer Churn dataset with similar approaches in published benchmarks.
 - Further improvement would require either additional data, external features (e.g., call center interactions, usage patterns), or more sophisticated techniques (deep learning, time-series modeling), which are outside the scope of this PoC.
 
@@ -304,16 +327,16 @@ SHAP (SHapley Additive exPlanations) is a method grounded in game theory that ex
 
 **Global SHAP** (used during model analysis) shows which features are most important across the entire dataset. The global ranking for the model:
 
-1. tenure -0.4817
-2. Contract (Two year) -0.4437
-3. Online Security -0.2528
-4. Fiber Optic Internet -0.2313
-5. Tech Support -0.2200
-6. Contract (One year) -0.1797
-7. Monthly Charges -0.1598
-8. Electronic Check Payment -0.1116
-9. Paperless Billing -0.0816
-10. Streaming Movies -0.0658
+1. tenure — 0.5258
+2. Contract (Two year) — 0.4265
+3. Fiber Optic Internet — 0.2954
+4. Online Security — 0.2577
+5. Tech Support — 0.2066
+6. Contract (One year) — 0.1924
+7. Monthly Charges — 0.1681
+8. Electronic Check Payment — 0.1662
+9. Paperless Billing — 0.1074
+10. Online Backup — 0.0687
 
 **Per-customer SHAP** (used in the chatbot) shows which features matter for **one specific customer**. This is critical because the same feature can push in opposite directions:
 
@@ -439,7 +462,7 @@ The chatbot implements a two-stage collection process based on SHAP feature impo
 **Quick Mode** collects the 6 most influential features first:
 - tenure, Contract, Monthly_Charges, Internet_Service, Tech_Support, Online_Security
 
-These 6 features account for the majority of the model's predictive power (as confirmed by SHAP analysis). If the resulting prediction is confident -below 20% or above 80% probability -the result is returned immediately.
+These 6 features were selected based on permutation importance on the validation set — they account for the majority of the model's Recall contribution. If the resulting prediction is confident — below 20% or above 80% probability — the result is returned immediately.
 
 **Full Mode** is triggered only when the quick prediction falls in the uncertain range (20-80%). The chatbot then asks for the remaining 9 features to refine the prediction. This design choice reduces friction for clear-cut cases while maintaining accuracy for borderline ones.
 
@@ -453,7 +476,7 @@ Mistral 7B running on CPU produces responses in 30-60 seconds. Each user message
 
 | Client Requirement | How It Is Addressed |
 |---|---|
-| **Develop a churn classification model** | XGBoost model with hyperparameter tuning, cross-validation, and SHAP explainability. Recall of 0.810, ROC-AUC of 0.845. |
+| **Develop a churn classification model** | XGBoost model with leakage-safe three-way split, hyperparameter tuning, permutation importance for feature selection, and SHAP explainability. Recall of 0.813, ROC-AUC of 0.846. |
 | **Marketing team interacts through an LLM-powered chatbot** | Streamlit chat interface with natural language input. No forms, no technical knowledge required. |
 | **Open-source models, no closed-source or third-party LLMs** | Mistral 7B via Ollama -fully open-source, runs locally. No data leaves the infrastructure. |
 | **Translates marketing questions into structured data** | Mistral extracts structured fields from natural language with anti-hallucination safeguards. |
