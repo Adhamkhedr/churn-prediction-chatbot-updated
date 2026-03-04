@@ -12,10 +12,12 @@ from preprocessing import (load_and_clean_data, build_preprocessor,
                            BINARY_COLS, ONEHOT_COLS, LABEL_COLS)
 
 
+#builds the churn prediction model and saves it. 
+#then saves the result into a file (churn_pipeline.pkl) that the chatbot loads later
 # ----------------------------------------------
 # 1. LOAD CLEAN DATA
 # ----------------------------------------------
-X, y = load_and_clean_data()
+X, y = load_and_clean_data()  #Load raw CSV and return clean X, y ready for training.
 
 # ----------------------------------------------
 # 2. TRAIN / TEST SPLIT
