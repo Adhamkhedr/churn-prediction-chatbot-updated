@@ -68,35 +68,111 @@ This is a **moderately imbalanced** dataset. The imbalance is not severe enough 
 
 **1. Contract Type is a Major Separator**
 
-Month-to-month contracts have a churn rate of approximately 42%, compared to just 11% for one-year contracts and 3% for two-year contracts. This makes intuitive sense -customers with no commitment can leave at any time with zero cost.
+*How we found it:* EDA Part 5 grouped all customers by Contract type and computed the churn rate for each group (churned / total in that group). A grouped bar chart was plotted showing churned vs non-churned counts per category. The churn rate spread (max rate − min rate) was computed and ranked across all categorical features.
+
+*What we saw:*
+- Month-to-month: 42.7% churn
+- One year: 11.3% churn
+- Two year: 2.8% churn
+- Spread: **39.88 percentage points** — the strongest categorical predictor in the entire dataset
+
+*Conclusion:* Customers with no long-term commitment can leave at any time with zero cost. Contract type became one of the 6 quick-mode features in the chatbot.
+
+---
 
 **2. Fiber Optic Internet Correlates with Higher Churn**
 
-Customers with fiber optic internet churn at roughly 42%, compared to approximately 19% for DSL. This is counterintuitive at first -fiber is a premium service. However, fiber optic customers tend to pay more, and when premium-paying customers feel the service does not match the price, they are more likely to leave. Higher expectations lead to higher dissatisfaction when unmet.
+*How we found it:* Same churn rate spread analysis in EDA Part 5. Grouped customers by Internet_Service type and computed churn rate per group.
 
-**3. Short Tenure + High Charges = Danger Zone**
+*What we saw:*
+- Fiber optic: ~41.9% churn
+- DSL: ~19.0% churn
+- No internet: ~7.4% churn
+- Spread: **34.49 percentage points** — second strongest categorical predictor
 
-A quadrant analysis was performed by splitting customers at the median tenure (29 months) and median Monthly_Charges ($64.76). Customers with tenure below 29 months and Monthly_Charges above $64.76 have a churn rate of approximately 58%. These are new customers paying premium prices who have not yet developed loyalty. They represent the highest-risk segment.
+*Conclusion:* This is counterintuitive — fiber is a premium service. The explanation is that fiber optic customers pay more, and when premium-paying customers feel the service doesn't match the price, they are more likely to leave. Higher expectations lead to higher dissatisfaction when unmet.
 
-**4. Long Tenure + Low Charges = Safe Zone**
+---
 
-Customers with more than 36 months of tenure paying under $50/month churn at only 5.5%. These are established, cost-effective customers -the most stable segment.
+**3. Tenure is the Strongest Numeric Predictor**
 
-**5. Support Services Reduce Churn**
+*How we found it:* EDA Part 4 computed the Pearson correlation between each numeric feature and Churn (after encoding Churn as 0/1). Boxplots were plotted showing the distribution of each numeric feature split by Churn=Yes vs Churn=No.
 
-Customers without tech support churn at approximately 42% versus 15% with it. Similarly, customers without online security churn at approximately 42% versus 15% with it. The presence of support add-ons significantly reduces churn risk, likely because they increase the perceived value and create switching costs.
+*What we saw:*
+- tenure correlation with Churn: **−0.35** (strongest among numeric features)
+- Median tenure for churners: ~10 months
+- Median tenure for non-churners: ~38 months — a 28-month gap
+- Monthly_Charges correlation: +0.19 (second strongest)
 
-**6. Total Charges is Redundant with Tenure**
+*Conclusion:* New customers churn far more than established ones. The longer someone stays, the more loyal they become. tenure became the #1 SHAP feature after training (importance 0.526).
 
-Total Charges and tenure have a correlation of 0.83. This makes sense -a customer who has been with the company longer will naturally have higher total charges. They carry nearly the same signal, so including both adds no new information. This was confirmed empirically: dropping Total Charges in Version C produced equal or better performance than keeping it.
+---
 
-**7. Three Features Have Near-Zero Predictive Power**
+**4. Short Tenure + High Charges = Danger Zone**
 
-- **Gender**: Less than 1 percentage point difference in churn rate between male and female customers.
-- **Phone Service**: Less than 4 percentage points difference. Nearly all customers (90%) have phone service, making this feature almost constant.
-- **Dual (multiple lines)**: Less than 4 percentage points difference. Offers minimal discriminative power.
+*How we found it:* EDA Part 6 performed a cross-feature quadrant analysis. Customers were split at the median tenure (29 months) and median Monthly_Charges ($64.76), creating four quadrants. The churn rate was computed for each quadrant.
 
-These findings were later confirmed by permutation importance on the validation set and sequential ablation testing, where all three consistently showed near-zero contribution to Recall.
+*What we saw:*
+- Low tenure + High charges: **58.03% churn** — highest risk segment
+- Low tenure + Low charges: ~26% churn
+- High tenure + High charges: ~29% churn
+- High tenure + Low charges: ~5.5% churn — safest segment
+
+*Conclusion:* New customers paying premium prices haven't yet developed loyalty. They represent the highest-risk segment and the primary target for proactive retention.
+
+---
+
+**5. Churn Drops Sharply with Tenure Over Time**
+
+*How we found it:* EDA Part 9 split customers into 6-month tenure bands (0-12, 13-24, 25-36, 37-48, 49-60, 61-72 months) and computed the churn rate for each band.
+
+*What we saw:*
+- 0-12 months: **47.44% churn**
+- 13-24 months: ~35% churn
+- 25-36 months: ~25% churn
+- 37-48 months: ~18% churn
+- 49-60 months: ~11% churn
+- 61-72 months: **6.61% churn**
+
+*Conclusion:* The first year is the highest-risk window. Churn rate drops by more than 7x between new customers and long-term customers. This reinforced tenure as the top feature in the model.
+
+---
+
+**6. Support Services Reduce Churn**
+
+*How we found it:* EDA Part 5 churn rate spread analysis for Online_Security and Tech_Support.
+
+*What we saw:*
+- No Online Security: ~42% churn | Has Online Security: ~15% churn → **34.36pp spread**
+- No Tech Support: ~42% churn | Has Tech Support: ~15% churn → **34.23pp spread**
+
+*Conclusion:* Support add-ons significantly reduce churn risk, likely because they increase perceived value and create switching costs. Both became part of the 6 quick-mode features in the chatbot.
+
+---
+
+**7. Total Charges is Redundant with Tenure**
+
+*How we found it:* EDA Part 4 computed the Pearson correlation matrix between all numeric features. A heatmap was plotted.
+
+*What we saw:*
+- Correlation between Total_Charges and tenure: **0.83**
+- Correlation between Total_Charges and Churn: −0.20 (weaker than tenure's −0.35)
+
+*Conclusion:* A customer who has been with the company longer naturally accumulates higher total charges. They carry nearly the same signal. Including both gives the model the same information twice, adding noise rather than value. This was confirmed empirically: the Version A/B/C feature experiment showed Version C (dropping Total_Charges) performed best on Validation Recall.
+
+---
+
+**8. Three Features Have Near-Zero Predictive Power**
+
+*How we found it:* EDA Part 5 churn rate spread analysis ranked all 16 categorical features. The bottom three were:
+
+| Feature | Churn Rate Spread | Notes |
+|---|---|---|
+| gender | 0.76pp | Male 26.2% vs Female 26.9% — essentially identical |
+| Phone_Service | 1.78pp | 90% of customers have it — near-constant feature |
+| Dual (multiple lines) | 3.68pp | Minimal separation between groups |
+
+*Conclusion:* These three features have no meaningful discriminative power. A 0.76pp difference between male and female churn rates is not a pattern — it is noise. All three were later confirmed by permutation importance on the validation set and sequential ablation testing: dropping all three together improved Recall from 0.8075 to 0.8209.
 
 ### How EDA Guided My Decisions
 
