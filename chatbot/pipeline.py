@@ -1,7 +1,8 @@
-import json
+import json  #Mistral returns extracted customer data as a JSON string
+#json.loads() > string → dict
 import os
 import sys
-import requests
+import requests    #Sends HTTP requests to Ollama (the local AI server running Mistral)
 import joblib
 import pandas as pd
 import numpy as np
@@ -12,26 +13,61 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'model'))
 from preprocessing import FeatureEngineer  # noqa: F401 — required for pickle
 
 # ──────────────────────────────────────────────
-# 1. LOAD MODEL
+# 1. LOAD MODEL - Opening the pkl file and taking out everything we need to start making predictions.
 # ──────────────────────────────────────────────
 MODEL_PATH = os.path.join(os.path.dirname(__file__), '..', 'model', 'churn_pipeline.pkl')
-model_data = joblib.load(MODEL_PATH)
+"""os.path.join just builds a file path. Think of it like giving someone directions:
 
+  start at pipeline.py's folder  (os.path.dirname(__file__))
+  go one folder up                (..)
+  enter the model folder          (model)
+  open this file                  (churn_pipeline.pkl) """
+
+model_data = joblib.load(MODEL_PATH)   
+"""model_data = {
+      'pipeline':      ...,   # the trained model
+      'feature_names': ...,   # column names after encoding
+      'defaults':      ...,   # median/mode per column
+      'input_columns': ...,   # original 15 column names
+  }
+"""
+#Take each thing out of the dictionary
 pipeline = model_data['pipeline']
 feature_names = model_data['feature_names']
 defaults = model_data['defaults']
 input_columns = model_data['input_columns']
 
 # Initialize SHAP explainer for per-customer explanations
+# every time we predict for a new customer, we want to tell the marketing agent why.
+#SHAP needs the XGBoost model directly to do that. The problem is our pkl contains a pipeline 
+#(preprocessor + model bundled together), not the model alone.
+# So these two lines:
+  #1. Pull out just the XGBoost from the pipeline bundle
+  #2. Create the SHAP explainer from it — ready to explain any prediction later
 xgb_model = pipeline.named_steps['model']
 explainer = shap.TreeExplainer(xgb_model)
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "mistral"
+OLLAMA_URL = "http://localhost:11434/api/generate"     #address to reach Ollama
+#
+OLLAMA_MODEL = "mistral"          #Ollama can host multiple models. We tell it to use Mistral specifically.
+#program that runs LLMs on my machine
+#ollama pull mistral     ← downloads the model
+#ollama serve            ← starts it, handles everything
+#Now any program on my machine can talk to it via that URL.
 
 # ──────────────────────────────────────────────
-# 2. SLOT DEFINITIONS
+# 2. SLOT DEFINITIONS -  A slot = one piece of information we need about the customer.
 # ──────────────────────────────────────────────
+# QUICK_SLOTS — the 6 most impactful features, collected first in every conversation.
+# Selected based on three converging sources of evidence:
+#   1. EDA Part 5 (churn rate spread): Contract (39.88pp gap), Internet_Service (34.49pp),
+#      Online_Security (34.36pp), Tech_Support (34.23pp) — top 4 categorical predictors
+#   2. EDA Part 4 (Pearson correlation with Churn): tenure (-0.35, strongest numeric predictor),
+#      Monthly_Charges (+0.19, second strongest numeric predictor)
+#   3. Global SHAP importance (post-training confirmation): all 6 appear in the top 7
+#      features by mean absolute SHAP value across the test set
+# If the model is confident at quick mode (probability <0.20 or >0.80), we stop here.
+# Otherwise we switch to full mode and collect the remaining 9 slots.
 QUICK_SLOTS = ['tenure', 'Contract', 'Monthly_Charges', 'Internet_Service',
                'Tech_Support', 'Online_Security']
 
@@ -39,7 +75,9 @@ ALL_SLOTS = list(input_columns)
 
 # Valid values for categorical fields (for validation)
 # Note: gender, Phone_Service, Dual were dropped — EDA showed <4pp churn
-# separation and both feature importance + SHAP confirmed near-zero impact.
+
+#this dictionary lists the only accepted values per column.
+#When Mistral extracts something from the agent's message, we check it against this list
 VALID_VALUES = {
     'Senior_Citizen': [0, 1],
     'Is_Married': ['Yes', 'No'],
@@ -56,8 +94,9 @@ VALID_VALUES = {
     'Payment_Method': ['Electronic check', 'Mailed check',
                        'Bank transfer (automatic)', 'Credit card (automatic)'],
 }
+#Numeric columns like tenure and Monthly_Charges are not here because any number is valid — no need to whitelist them.
 
-# Human-readable field descriptions for the LLM
+# Tell Mistral what each field means > Prompts sent to Mistral  
 FIELD_DESCRIPTIONS = {
     'Senior_Citizen': 'senior citizen status (0 for No, 1 for Yes)',
     'Is_Married': 'marital status (Yes/No)',
@@ -103,55 +142,129 @@ FEATURE_DISPLAY_NAMES = {
 # ──────────────────────────────────────────────
 # 3. SESSION STATE
 # ──────────────────────────────────────────────
+# Each time a new conversation starts, create a new Session object
 class Session:
     def __init__(self):
-        self.slots = {col: None for col in ALL_SLOTS}
-        self.mode = 'quick'  # 'quick' or 'full'
-        self.conversation_history = []
-        self.prediction_made = False
+        self.slots = {col: None for col in ALL_SLOTS}  # Creates an empty slot for every column. All start as None (empty):
+        """ All start as None (empty):
+  {
+    'tenure': None,
+    'Contract': None,
+    'Monthly_Charges': None,
+    ...
+  }"""
+        self.mode = 'quick'  # Every conversation starts in quick mode — always.
+        self.conversation_history = []    # Empty list that stores the back-and-forth messages of the conversation.
+        self.prediction_made = False   #A flag. Once a prediction is made, this flips to True and blocks any further predictions in the same session.
 
-    def filled_slots(self):
+    def filled_slots(self):  # returns only the slots that have been collected so far
         return {k: v for k, v in self.slots.items() if v is not None}
 
-    def missing_slots(self, mode=None):
+    def missing_slots(self, mode=None):    
+        #returns slots still empty, depending on current mode:
+        # in quick mode → checks only the 6 QUICK_SLOTS
+        # in full mode  → checks all 15 ALL_SLOTS
+        # This is what the chatbot uses to know what to ask next.
         mode = mode or self.mode
         target_slots = QUICK_SLOTS if mode == 'quick' else ALL_SLOTS
         return [s for s in target_slots if self.slots[s] is None]
 
-    def all_required_filled(self):
+    def all_required_filled(self):    #are we ready to predict yet?
         return len(self.missing_slots()) == 0
 
+""" If we still need Contract and Internet_Service:
+  missing_slots() → ['Contract', 'Internet_Service']                                                                                    
+  len(...)        → 2
+  2 == 0          → False   # not ready yet
+
+  If everything is filled:
+  missing_slots() → []
+  len(...)        → 0
+  0 == 0          → True    # ready to predict
+"""
 
 # ──────────────────────────────────────────────
-# 4. LLM INTERACTION
+# 4. LLM INTERACTION - two functions , Each one builds a different prompt to send to Mistral.
 # ──────────────────────────────────────────────
+#Every time the marketing team member sends a message, two things need to happen:                                                         
+  #1. Extract the customer data from what they typed   
+  #2. Reply asking for whatever is still missing                                                                                         
+  #Both require Mistral. But they're completely different jobs — so we build two separate prompts.
 def call_ollama(prompt):
     """Call Ollama API with Mistral model."""
     try:
-        response = requests.post(OLLAMA_URL, json={
-            "model": OLLAMA_MODEL,
+        response = requests.post(OLLAMA_URL, json={   #sends the prompt to Ollama's address
+            "model": OLLAMA_MODEL,                    #tells Ollama to use Mistral
             "prompt": prompt,
             "stream": False,
             "options": {"temperature": 0.1}
         }, timeout=300)
         response.raise_for_status()
-        return response.json()["response"]
+        return response.json()["response"]     #Ollama returns a JSON object. We pull out just the "response" field , the actual text Mistral generated.   
     except requests.exceptions.ConnectionError:
         return "ERROR: Cannot connect to Ollama. Make sure Ollama is running (ollama serve)."
     except Exception as e:
         return f"ERROR: {str(e)}"
 
 
-def build_extraction_prompt(user_message, session):
-    """Build a prompt that asks the LLM to extract field values from user message."""
+def build_extraction_prompt(user_message, session):  #builds Prompt 1  
+    """Build a prompt that asks the LLM ( Mistral ) to extract field values from user message."""
+    """  It takes two inputs:                                                                                                                                                                                                                                                          
+            1. user_message :- The exact text the marketing team member just typed: "customer is on a two year contract, no tech support"
+  This gets pasted directly into the prompt so Mistral can read it and extract data from it.
+            2. session :- The current conversation's notepad — the Session object from Section 3.
+We pass it in so the function can call:
+session.missing_slots()  # what do we still need?
+session.filled_slots()   # what do we already have?
+
+Without the session, the function wouldn't know:
+  - Which fields to ask Mistral to extract
+  - Which fields are already collected and don't need extracting again
+
+  But this message can't be the same every time — it changes based on what slots are already filled and what's still missing. So we     
+  build it dynamically in code."""
+    
+
     missing = session.missing_slots()
     filled = session.filled_slots()
 
-    missing_descriptions = "\n".join(
+    missing_descriptions = "\n".join(    
         f"  - {field}: {FIELD_DESCRIPTIONS[field]}"
         for field in missing
     )
+    """The loop
+        for field in missing
+        Goes through the missing list one by one:
+        - first loop: field = 'Contract'
+        - second loop: field = 'Tech_Support'
+        - third loop: field = 'Online_Security'
 
+    For each field, build one line
+
+    f"  - {field}: {FIELD_DESCRIPTIONS[field]}"
+
+    - field = the column name → 'Contract'
+    - FIELD_DESCRIPTIONS[field] = looks up that name in the dictionary → 'contract type (Month-to-month/One year/Two year)'
+
+    So each loop produces one line:
+        - Contract: contract type (Month-to-month/One year/Two year)
+        - Tech_Support: has tech support (Yes/No/No internet service)
+        - Online_Security: has online security (Yes/No/No internet service)
+
+    "\n".join(...)
+
+    Joins all those lines together with a new line between each one, producing one big string:
+        - Contract: contract type (Month-to-month/One year/Two year)
+        - Tech_Support: has tech support (Yes/No/No internet service)
+        - Online_Security: has online security (Yes/No/No internet service)
+    That string then gets inserted into the prompt so Mistral can read it.
+
+    Why not just send the column names?
+    If we sent Mistral just:
+    Extract: Contract, Tech_Support, Online_Security
+    Mistral might not know what valid values are. By sending the full description with valid options, Mistral knows exactly what to look  
+    for and what to return."""
+    
     filled_info = ""
     if filled:
         filled_lines = "\n".join(f"  - {field}: {val}" for field, val in filled.items())

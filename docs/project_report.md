@@ -538,9 +538,60 @@ The chatbot implements a two-stage collection process based on SHAP feature impo
 **Quick Mode** collects the 6 most influential features first:
 - tenure, Contract, Monthly_Charges, Internet_Service, Tech_Support, Online_Security
 
-These 6 features were selected based on permutation importance on the validation set — they account for the majority of the model's Recall contribution. If the resulting prediction is confident — below 20% or above 80% probability — the result is returned immediately.
+These 6 features were selected based on three converging sources of evidence: EDA Part 5 churn rate spread (Contract 39.88pp, Internet_Service 34.49pp, Online_Security 34.36pp, Tech_Support 34.23pp — the top 4 categorical predictors), EDA Part 4 Pearson correlation (tenure −0.35 and Monthly_Charges +0.19 — the top 2 numeric predictors), and global SHAP importance which confirmed all 6 appear in the top 7 features by mean absolute SHAP value across the test set. If the resulting prediction is confident — below 20% or above 80% probability — the result is returned immediately.
 
 **Full Mode** is triggered only when the quick prediction falls in the uncertain range (20-80%). The chatbot then asks for the remaining 9 features to refine the prediction. This design choice reduces friction for clear-cut cases while maintaining accuracy for borderline ones.
+
+### End-to-End Message Flow
+
+The following describes exactly what happens from the moment a marketing team member sends a message to when a prediction is returned.
+
+**Session creation**: When the first message arrives at `main.py`, it checks whether the `session_id` already exists in the sessions dictionary. If not, a new `Session` object is created with all 15 slots set to `None`, mode set to `quick`, and `prediction_made` set to `False`. For every message after that in the same conversation, the existing session is reused — the team member won't provide all customer data in one message, so the session persists state across multiple turns.
+
+**Prediction lock check**: The first thing `handle_message()` does is check whether `prediction_made` is `True`. If so, the session is locked and a message is immediately returned asking the team member to start a new session. This ensures each session produces exactly one prediction per customer.
+
+**Extraction**: `build_extraction_prompt()` looks at which slots are filled and which are missing, converts the missing ones to human-readable descriptions using `FIELD_DESCRIPTIONS`, and assembles a prompt instructing Mistral to extract field values from the message as JSON — with null for anything not explicitly mentioned. This prompt is sent to Mistral via `call_ollama()`, which posts it to Ollama's local HTTP endpoint (`http://localhost:11434/api/generate`) and waits for the response.
+
+**Validation**: The raw text response goes through `extract_slots_from_response()` which does three things in order: converts the JSON text string to a Python dictionary using `json.loads()`, runs a hallucination check that rejects any extracted field whose keywords don't appear in the original message, and validates types and values (numbers coerced to float, categoricals matched case-insensitively against the valid values whitelist). Only values passing all three checks are saved to the session slots.
+
+**Check and respond**: `all_required_filled()` checks whether all required slots for the current mode are filled. If not, `build_conversation_prompt()` tells Mistral which fields are already collected and which are still missing, Mistral generates a natural friendly reply, and that reply is sent back along with an acknowledgment of what was just extracted. The conversation loops until all required slots are filled.
+
+**Prediction**: When all required slots are filled, `make_prediction()` is called. It builds a one-row DataFrame from session slots, fills any uncollected columns with defaults (median or mode from training data saved in the pkl), runs `pipeline.predict_proba()` to get the churn probability, and runs SHAP to find the top 3 features driving that specific prediction. Each SHAP value is paired with a direction (positive = increasing churn risk, negative = reducing churn risk) and mapped to a human-readable name.
+
+**Confidence check**: If mode is quick and the probability falls between 0.20 and 0.80, the session switches to full mode and the conversation continues asking for the remaining 9 slots. If the probability is outside that range or full mode is already complete, `build_explanation()` converts the numbers into a plain English message with risk level, probability percentage, top 3 SHAP factors, and a recommendation. `prediction_made` is set to `True` and the result is returned.
+
+```
+Message arrives → session created/retrieved
+        │
+        ▼
+prediction_made? → Yes → block, return "start new session"
+        │ No
+        ▼
+build_extraction_prompt() → call_ollama() → Mistral returns JSON text
+        │
+        ▼
+extract_slots_from_response()
+  → json.loads(): text → dictionary
+  → hallucination check: keywords present in message?
+  → type & value validation
+  → save clean values to session slots
+        │
+        ▼
+all_required_filled()?
+        │ No                              │ Yes
+        ▼                                 ▼
+build_conversation_prompt()         make_prediction()
+→ call_ollama()                       → build row (slots + defaults)
+→ friendly reply to team member       → pipeline.predict_proba()
+→ loop                                → SHAP top 3 factors
+                                           │
+                                     quick mode + 0.20–0.80?
+                                       │ Yes          │ No
+                                       ▼              ▼
+                                  switch to     build_explanation()
+                                  full mode     prediction_made = True
+                                  loop again    return result
+```
 
 ### Performance Considerations
 
@@ -630,3 +681,4 @@ Integrate the chatbot into tools the marketing team already uses: Slack, Microso
 ### Customer Segmentation
 
 Use the model's predictions and SHAP values to automatically cluster customers into risk segments (e.g., "High Risk - Contract Issue", "High Risk - Service Dissatisfaction", "Moderate Risk - Price Sensitive"). This enables more targeted marketing campaigns than individual customer lookups.
+
