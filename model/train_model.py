@@ -369,7 +369,12 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-# Build encoded feature names for labeling SHAP plots
+# Before preprocessing: 15 input columns
+# After preprocessing, XGBoost actually sees more columns because every multi-value text column explodes        
+#After preprocessing, text columns like Contract become multiple binary columns (Contract_Month-to-month,       
+#Contract_One year, etc.). This builds the full list of those expanded column names so SHAP plots have readable 
+#labels instead of feature_0, feature_1.
+
 final_feature_names = (
     BINARY_COLS
     + list(xgb_pipeline.named_steps['preprocessor']
@@ -449,3 +454,5 @@ joblib.dump({
 print(f"Pipeline saved to: {save_path}")
 print(f"Input columns ({len(X.columns)}): {list(X.columns)}")
 print(f"Encoded feature names ({len(final_feature_names)}): {final_feature_names}")
+
+# Everything in train_model.py ran once to produce churn_pipeline.pkl. Pipeline.py just loads that finished result.
