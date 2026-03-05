@@ -759,4 +759,74 @@ The three-way split. When I reviewed the original code, intermediate decisions �
 
 ---
 
-*Total: 60+ questions across 18 categories.*
+---
+
+## 19. Additional Follow-Up Questions
+
+**Q: What would you do differently if you had more data?**
+
+Several things. First, with more rows I'd move beyond a static snapshot model toward a time-series approach — tracking how each customer's behavior changes month over month. Churn is rarely a sudden decision; it's usually a gradual drift in engagement, complaints, or usage patterns. A model that sees "this customer's monthly charges increased 20% last month and they called support twice" is far more predictive than one that sees a single snapshot.
+
+Second, with more features I'd incorporate behavioral signals that are absent from this dataset entirely — call center interaction history, network quality complaints, data usage trends, app engagement. These are among the strongest real-world churn indicators in telecom and are completely missing here.
+
+Third, with more labeled churn events over time I'd implement survival analysis — predicting not just whether a customer will churn but when, giving the retention team time-based prioritization rather than a binary flag.
+
+---
+
+**Q: How confident are you this model would work on real E& customer data?**
+
+Honest answer: the architecture would transfer but the model weights would not. This dataset was created by IBM as a demo — its distributions, pricing ranges, and churn rates may not reflect any real operator. The model learned that Monthly_Charges around $90 correlates with churn in this dataset, but E&'s pricing structure is entirely different.
+
+What I'm confident transfers: the methodology (three-way split, leakage-safe workflow, SHAP explanations, quick/full mode design), the feature engineering decisions (dropping redundant correlated features), and the encoding strategy. The actual model would need to be retrained on real customer data before being trusted for production decisions.
+
+---
+
+**Q: Why a chatbot specifically — why not a dashboard or a form?**
+
+The end user is the marketing team, not data scientists. A dashboard requires them to know which fields to enter, in what format, and what the output means. A form is marginally better but still creates friction — the team thinks about customers in natural language, not structured fields.
+
+The chatbot matches how they already work. They describe a customer the way they'd describe them to a colleague: "this guy's been with us two months, on fiber optic, paying a lot." The system handles the translation from that description to model input. Adoption is higher when the tool fits the workflow rather than forcing the workflow to fit the tool.
+
+There's also a secondary benefit: the chatbot asks follow-up questions when it needs more information. A form shows all fields at once, many of which the user may not have immediately available. The chatbot guides them through only what's needed.
+
+---
+
+**Q: How do you know the LLM extraction actually works — what was your validation approach?**
+
+Honest answer: for a PoC, this was tested manually through conversation trials rather than a formal benchmark. I ran a set of test messages with known values and verified the extracted JSON matched expectations. I also stress-tested edge cases — ambiguous phrasing, multiple values in one message, out-of-scope messages — and refined the prompt and keyword guards based on failures.
+
+For a production system, the right approach would be to build a labeled dataset of (message → expected slot values) pairs, run the extraction pipeline over them, and measure field-level accuracy. This would give a quantitative reliability number and catch systematic failure modes. That's a clear gap in the current PoC.
+
+---
+
+**Q: How confident are you in the 81% recall number — could it be inflated?**
+
+The methodology was specifically designed to make it trustworthy. The test set was touched exactly once — no hyperparameter decisions, no feature drop decisions, no threshold decisions were made using it. All intermediate choices (feature versions A/B/C, permutation importance, hyperparameter search) used only Train and Validation.
+
+The overfitting check further supports it: train recall is ~82.7%, test recall is 81.3% — a gap of only 1.4%. A gap above 5-10% would signal overfitting. The strong regularization in the best hyperparameters (shallow trees, 60% subsampling, low learning rate) deliberately prevents the model from memorizing training patterns.
+
+One caveat: the dataset is synthetic (IBM demo data), so the 81.3% is valid for this dataset but cannot be directly extrapolated to real E& data without retraining and re-evaluating.
+
+---
+
+**Q: Why did you keep the 0.5 threshold specifically?**
+
+The threshold sweep showed that 0.55 gives marginally better F1 (0.6339 vs 0.6275) but Recall drops from 0.813 to 0.759 — a loss of 5.4 percentage points. Given that the entire project is optimized for Recall (catching churners is the priority, missing one costs more than a false alarm), trading 5.4pp of Recall for a small F1 gain is the wrong tradeoff for this business context.
+
+0.5 was kept because it maximizes Recall among thresholds that still maintain reasonable precision. If the business context changes — for example, if the retention budget is limited and the team can only contact a smaller number of customers — then a higher threshold like 0.55 or 0.60 would be appropriate to improve precision at the cost of recall.
+
+---
+
+**Q: What is your debugging process if the model performs badly in production?**
+
+Three-stage approach:
+
+First, **diagnose whether it's a data problem or a model problem**. Check whether incoming feature distributions have drifted from training distributions — if Monthly_Charges values are suddenly in a completely different range, or contract type proportions have shifted, the model is seeing data it wasn't trained on. This is data drift and the fix is retraining, not debugging the model.
+
+Second, **if the data looks normal, look at specific failure cases**. Pull a sample of false negatives (churners the model missed) and false positives (stable customers incorrectly flagged). Run SHAP on them. Often a pattern emerges — a specific customer segment that was underrepresented in training, or a feature combination the model consistently mishandles.
+
+Third, **check the threshold**. If precision has collapsed (too many false positives) or recall has dropped (too many misses), the threshold may need adjustment before retraining. This is a quick intervention that doesn't require a new training run.
+
+---
+
+*Total: 70+ questions across 19 categories.*
