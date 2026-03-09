@@ -529,7 +529,7 @@ This minimizes conversation length for clear-cut cases while maintaining accurac
 
 When the first message arrives at `main.py`, it checks whether the `session_id` already exists in the sessions dictionary. If not, a new `Session` object is created with all 15 slots set to `None`, mode set to `quick`, and `prediction_made` set to `False`. For every message after that in the same conversation, the existing session is reused.
 
-The message then enters `handle_message()`. The first check is whether `prediction_made` is `True` — if so, the session is locked and we immediately return a message asking the team member to start a new session. This ensures each session produces exactly one prediction.
+The message then enters `handle_message()`. The first check is whether `prediction_made` is `True` — if so, the session automatically resets: all slots are cleared back to `None`, mode returns to `quick`, and `prediction_made` is set back to `False`. The incoming message is then processed as if it's the first message for a brand new customer. This allows the marketing team member to check multiple customers in one session without any interruption.
 
 If the session is not locked, two things happen in sequence:
 
@@ -555,7 +555,7 @@ The session is needed because a marketing team member won't provide all customer
 
 Three helper methods make the session useful: `filled_slots()` returns only the non-None values, `missing_slots()` returns which slots are still empty given the current mode, and `all_required_filled()` checks if the missing list is empty — the signal to attempt a prediction.
 
-Once `prediction_made` is set to `True`, any further message in that session is blocked. The team member must click "New Session" which calls the `/reset` endpoint, deletes the session from the dictionary, and starts fresh for a new customer.
+Once `prediction_made` is set to `True`, the next incoming message automatically resets the session — slots cleared, mode back to quick, `prediction_made` back to `False` — and the bot starts collecting data for the new customer seamlessly. The team member can also click "New Session" at any time, which calls the `/reset` endpoint, deletes the session entirely, and clears the chat history on screen for a full visual reset.
 
 ---
 

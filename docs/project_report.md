@@ -548,7 +548,7 @@ The following describes exactly what happens from the moment a marketing team me
 
 **Session creation**: When the first message arrives at `main.py`, it checks whether the `session_id` already exists in the sessions dictionary. If not, a new `Session` object is created with all 15 slots set to `None`, mode set to `quick`, and `prediction_made` set to `False`. For every message after that in the same conversation, the existing session is reused — the team member won't provide all customer data in one message, so the session persists state across multiple turns.
 
-**Prediction lock check**: The first thing `handle_message()` does is check whether `prediction_made` is `True`. If so, the session is locked and a message is immediately returned asking the team member to start a new session. This ensures each session produces exactly one prediction per customer.
+**Prediction lock check**: The first thing `handle_message()` does is check whether `prediction_made` is `True`. If so, the session automatically resets — all slots cleared to `None`, mode back to `quick`, `prediction_made` back to `False` — and the message is processed as a fresh customer. This allows the marketing team member to check multiple customers in one session without interruption.
 
 **Extraction**: `build_extraction_prompt()` looks at which slots are filled and which are missing, converts the missing ones to human-readable descriptions using `FIELD_DESCRIPTIONS`, and assembles a prompt instructing Mistral to extract field values from the message as JSON — with null for anything not explicitly mentioned. This prompt is sent to Mistral via `call_ollama()`, which posts it to Ollama's local HTTP endpoint (`http://localhost:11434/api/generate`) and waits for the response.
 
@@ -564,7 +564,7 @@ The following describes exactly what happens from the moment a marketing team me
 Message arrives → session created/retrieved
         │
         ▼
-prediction_made? → Yes → block, return "start new session"
+prediction_made? → Yes → auto-reset session, continue with new customer
         │ No
         ▼
 build_extraction_prompt() → call_ollama() → Mistral returns JSON text
