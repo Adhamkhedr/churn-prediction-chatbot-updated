@@ -519,11 +519,11 @@ def handle_message(session, user_message):
     Returns: dict with 'response' and optionally 'prediction'
     """
     if session.prediction_made:
-        return {
-            'response': "I've already provided a prediction for this customer. "
-                        "To check a different customer, please start a new session "
-                        "by clicking the **New Session** button above."
-        }
+        # Auto-reset for a new customer
+        session.slots = {col: None for col in ALL_SLOTS}
+        session.mode = 'quick'
+        session.prediction_made = False
+        session.conversation_history = []
 
     # Step 1: Extract slots from user message
     extraction_prompt = build_extraction_prompt(user_message, session)
